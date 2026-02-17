@@ -29,7 +29,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: "http://localhost:5000",
+        url: "https://seamstress-production.up.railway.app/",
         description: "Development server"
       }
     ],
