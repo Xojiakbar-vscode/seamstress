@@ -6,9 +6,13 @@ const swaggerUi = require("swagger-ui-express");
 const app = express();
 
 // Middlewares
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use(cors({
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 // Swagger setup
 const swaggerOptions = {
