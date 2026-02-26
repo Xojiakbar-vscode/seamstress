@@ -30,92 +30,89 @@ async function calculateUserEarning(user_id, month, year) {
 ======================================================= */
 exports.createPayment = async (req, res) => {
   const transaction = await sequelize.transaction();
-
   try {
     const { user_id, paid_amount, payment_type, comment } = req.body;
+    const amountToPay = Number(paid_amount);
 
-    if (!user_id || !paid_amount || !payment_type) {
-      return res.status(400).json({
-        message: "user_id, paid_amount va payment_type majburiy"
-      });
-    }
-
-    const user = await User.findByPk(user_id);
+    // 1. Foydalanuvchini tekshirish
+    const user = await User.findByPk(user_id, { transaction });
     if (!user) {
+      await transaction.rollback();
       return res.status(404).json({ message: "User topilmadi" });
     }
 
     const month = new Date().getMonth() + 1;
     const year = new Date().getFullYear();
 
-    // 1️⃣ HOZIRGI QOLDIQ (WorkLogdagi jami to'lanishi kerak bo'lgan summa)
-    // Bu yerda Payment summasini ayirish shart emas, chunki WorkLog 
-    // oldingi to'lovlarda allaqachon update qilingan bo'ladi.
-    const current_balance = await calculateUserEarning(user_id, month, year);
+    // 2. WorkLoglarni olish (Faqat kerakli ustunlarni va limit bilan)
+    const worklogs = await WorkLog.findAll({
+      where: {
+        user_id,
+        month,
+        year,
+        total_price: { [Op.gt]: 0 }
+      },
+      order: [["createdAt", "ASC"]],
+      transaction,
+      lock: transaction.LOCK.UPDATE // Qatorlarni blocklash (poyga holatini oldini olish)
+    });
 
-    // Ortiqcha to'lovni tekshirish
-    if (Number(paid_amount) > current_balance) {
+    const current_balance = worklogs.reduce((sum, log) => sum + Number(log.total_price), 0);
+
+    if (amountToPay > current_balance) {
+      await transaction.rollback();
       return res.status(400).json({
         message: `To'lov miqdori qolgan summadan katta. Maksimal: ${current_balance}`
       });
     }
 
-    const remaining_after = current_balance - Number(paid_amount);
-
-    // 2️⃣ PAYMENT YARATISH
-    const payment = await Payment.create(
-      {
-        user_id,
-        total_earned: current_balance, // O'sha paytdagi qoldiq
-        paid_amount,
-        remaining_amount: remaining_after,
-        payment_type,
-        comment,
-        month,
-        year
-      },
-      { transaction }
-    );
-
-    // 3️⃣ WORKLOGDAN SUMMANI AYIRISH (Zanjir bo'yicha FIFO)
-    let remainingToDeduct = Number(paid_amount);
-
-    const worklogs = await WorkLog.findAll({
-      where: { 
-        user_id, 
-        month, 
-        year,
-        total_price: { [Op.gt]: 0 } 
-      },
-      order: [["createdAt", "ASC"]],
-      transaction
-    });
+    // 3. FIFO Logikasi (Xotirada hisoblash)
+    let remainingToDeduct = amountToPay;
+    const updatePromises = [];
 
     for (let log of worklogs) {
       if (remainingToDeduct <= 0) break;
 
       const logPrice = Number(log.total_price);
+      let newPrice = 0;
 
-      if (logPrice >= remainingToDeduct) {
-        log.total_price = logPrice - remainingToDeduct;
+      if (logPrice > remainingToDeduct) {
+        newPrice = logPrice - remainingToDeduct;
         remainingToDeduct = 0;
       } else {
         remainingToDeduct -= logPrice;
-        log.total_price = 0;
+        newPrice = 0;
       }
 
-      await log.save({ transaction });
+      // Har birini save() qilish o'rniga update so'rovini massivga yig'amiz
+      updatePromises.push(
+        WorkLog.update(
+          { total_price: newPrice },
+          { where: { id: log.id }, transaction }
+        )
+      );
     }
 
-    await transaction.commit();
+    // 4. Barcha WorkLoglarni parallel yangilash
+    await Promise.all(updatePromises);
 
-    res.status(201).json({
-      message: "Payment muvaffaqiyatli yaratildi",
-      payment
-    });
+    // 5. Payment yaratish
+    const payment = await Payment.create({
+      user_id,
+      total_earned: current_balance,
+      paid_amount: amountToPay,
+      remaining_amount: current_balance - amountToPay,
+      payment_type,
+      comment,
+      month,
+      year
+    }, { transaction });
+
+    await transaction.commit();
+    res.status(201).json({ message: "Payment muvaffaqiyatli yaratildi", payment });
 
   } catch (error) {
-    await transaction.rollback();
+    if (transaction) await transaction.rollback();
     res.status(500).json({ message: error.message });
   }
 };
