@@ -23,6 +23,10 @@ module.exports = (sequelize) =>
       type: DataTypes.INTEGER,
       defaultValue: 0
     },
+    order: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0 
+    },
     time_per_unit: {
       type: DataTypes.FLOAT,
       allowNull: false // minut

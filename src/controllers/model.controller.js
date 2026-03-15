@@ -15,47 +15,37 @@ exports.createModel = async (req, res) => {
       return res.status(400).json({ message: "Total quantity must be greater than 0" });
     }
 
-    // Transaction orqali model va detailarni bir vaqtda yaratish
     const result = await Model.sequelize.transaction(async (t) => {
-      // Model yaratish
       const model = await Model.create({
         name,
         total_quantity,
         status: status || 'active'
       }, { transaction: t });
 
-      // Agar detallar berilsa
       if (details && Array.isArray(details) && details.length > 0) {
         const modelDetails = [];
         
         for (const detail of details) {
-          // Detail mavjudligini tekshirish
           const detailExists = await Detail.findByPk(detail.detail_id, { transaction: t });
           if (!detailExists) {
             throw new Error(`Detail with ID ${detail.detail_id} not found`);
           }
 
-          if (detail.required_quantity <= 0) {
-            throw new Error(`Required quantity must be greater than 0 for detail ${detail.detail_id}`);
-          }
-
-          if (!detail.time_per_unit || detail.time_per_unit <= 0) {
-            throw new Error(`Time per unit must be greater than 0 for detail ${detail.detail_id}`);
-          }
+          // 0.25 kabi vaqtlar uchun parseFloat ishlatamiz
+          const timePerUnit = parseFloat(detail.time_per_unit);
 
           const modelDetail = await ModelDetail.create({
             model_id: model.id,
             detail_id: detail.detail_id,
             required_quantity: detail.required_quantity,
-            time_per_unit: detail.time_per_unit
+            time_per_unit: timePerUnit,
+            order: detail.order || 0 // ТАРТИБ РАҚАМИНИ САҚЛАШ
           }, { transaction: t });
 
           modelDetails.push(modelDetail);
         }
-        
-        model.ModelDetails = modelDetails;
+        model.setDataValue('ModelDetails', modelDetails);
       }
-
       return model;
     });
 
