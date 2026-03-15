@@ -117,27 +117,33 @@ exports.updateModel = async (req, res) => {
 
     if (!model) {
       await transaction.rollback();
-      return res.status(404).json({ message: "Model not found" });
+      return res.status(404).json({ message: "Model топилмади" });
     }
 
-    if (model.status === 'completed') {
+    // "completed" бўлган моделни ўзгартиришни чеклаш (ихтиёрий)
+    if (model.status === 'completed' && status !== 'active') {
       await transaction.rollback();
-      return res.status(400).json({ message: "Cannot update completed model" });
+      return res.status(400).json({ message: "Якунланган моделни ўзгартириб бўлмайди" });
     }
 
-    // Modelni update qilish
-    await model.update({ name, total_quantity, status }, { transaction });
+    // 1. Асосий модел маълумотларини янгилаш
+    await model.update({ 
+      name, 
+      total_quantity, 
+      status: status || model.status 
+    }, { transaction });
 
-    // Eski detailsni o'chirish
+    // 2. Эски деталларни ўчириш
     await ModelDetail.destroy({ where: { model_id: model.id }, transaction });
 
-    // Yangi detailsni qo'shish
+    // 3. Янги деталларни тартиби (order) билан қўшиш
     if (Array.isArray(details) && details.length > 0) {
       const newDetails = details.map(d => ({
         model_id: model.id,
         detail_id: d.detail_id,
         required_quantity: d.required_quantity,
-        time_per_unit: d.time_per_unit
+        time_per_unit: parseFloat(d.time_per_unit) || 0, // 0.25 каби каср сонлар учун
+        order: parseInt(d.order) || 0 // Фронтенддан келган тартиб рақами
       }));
 
       await ModelDetail.bulkCreate(newDetails, { transaction });
@@ -145,17 +151,24 @@ exports.updateModel = async (req, res) => {
 
     await transaction.commit();
 
+    // Натижани қайтаришда тартиб бўйича саралаб олиш
     const updatedModel = await Model.findByPk(model.id, {
-      include: ModelDetail
+      include: [{
+        model: ModelDetail,
+        as: 'ModelDetails', // Моделларингиздаги алиасга қаранг
+        separate: true,
+        order: [['order', 'ASC']]
+      }]
     });
 
     res.status(200).json({
-      message: "Model updated successfully",
+      message: "Model муваффақиятли янгиланди",
       model: updatedModel
     });
 
   } catch (error) {
-    await transaction.rollback();
+    if (transaction) await transaction.rollback();
+    console.error("Update Model Error:", error);
     res.status(500).json({ message: error.message });
   }
 };
